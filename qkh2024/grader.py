@@ -7,8 +7,13 @@ from qiskit.compiler import transpile
 from qiskit.quantum_info import hellinger_distance, hellinger_fidelity
 from qiskit_aer import AerSimulator
 
-class grade:
+class scorer:
     def __init__(
+        self, 
+    ):
+        return
+
+    def score(
         self, 
         circuit_target: QuantumCircuit, 
         circuit_transpiled: QuantumCircuit, 
@@ -33,7 +38,7 @@ class grade:
             backend (IBMQBackend): An IBM Quantum backend instance
 
         Returns:
-            infidelity(float): infidelity as a score (closer to 0 the better)
+            score(float): estimated fidelity as a score
         """
 
         fid = 1
@@ -72,7 +77,7 @@ class grade:
                         fid *= 1 - backend.target[item[0].name][(q0, )].error
                         touched.add(q0)
 
-        return 1 - fid
+        return fid
 
     def grader_operation_check(
         self, 
