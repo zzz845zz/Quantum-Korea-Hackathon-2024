@@ -5,3 +5,6 @@ description = "An example project"
 
 [project.entry-points."qiskit.transpiler.layout"] 
 "vf2" = "my_qiskit_plugin:VF2LayoutPlugin"
+
+[project.entry-points."qiskit.transpiler.routing"]
+"bsabre" = "my_qiskit_plugin2:BaseSabreSwapPlugin"
