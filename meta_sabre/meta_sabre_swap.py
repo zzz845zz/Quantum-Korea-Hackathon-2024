@@ -17,13 +17,13 @@ from collections import defaultdict
 from copy import copy, deepcopy
 
 import numpy as np
-import retworkx
 
 from qiskit.circuit.library.standard_gates import SwapGate
 from qiskit.transpiler.basepasses import TransformationPass
 from qiskit.transpiler.exceptions import TranspilerError
 from qiskit.transpiler.layout import Layout
 from qiskit.dagcircuit import DAGOpNode
+import rustworkx
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +176,7 @@ class MetaSabreSwap(TransformationPass):
                     )
                 )
             h_scores.sort(key=lambda x: x[1])  # Sort by H score (lower is better)
-            high_score_len = max(len(h_scores) // 2, 2)
+            high_score_len = max(len(h_scores) // 1, 2)
             swap_scores = {}
             for swap_qubits, _ in h_scores[:high_score_len]:
                 trial_layout = current_layout.copy()
@@ -457,7 +457,7 @@ def _shortest_swap_path(target_qubits, coupling_map, layout):
     start, goal = layout._v2p[v_start], layout._v2p[v_goal]
     # TODO: remove the list call once using retworkx 0.12, as the return value can be sliced.
     path = list(
-        retworkx.dijkstra_shortest_paths(coupling_map.graph, start, target=goal)[goal]
+        rustworkx.dijkstra_shortest_paths(coupling_map.graph, start, target=goal)[goal]
     )
     # Swap both qubits towards the "centre" (as opposed to applying the same swaps to one) to
     # parallelise and reduce depth.
@@ -474,14 +474,24 @@ if __name__ == "__main__":
     from qiskit.circuit.library import QFT
     from qiskit.transpiler import CouplingMap
     from qiskit.transpiler.passes.routing import SabreSwap as BaseSabreSwap
+    from qiskit.transpiler.passes.layout import TrivialLayout
+    from qiskit_ibm_runtime import QiskitRuntimeService
     import time
 
-    nq = 6
-    coupling_map = CouplingMap.from_line(nq)
+    nq = 5
+    coupling_map = CouplingMap.from_ring(nq)
+    # coupling_map = CouplingMap.from_grid(3, 3)
     pass_manager = PassManager()
     base_manager = PassManager()
     circuit = QFT(nq).decompose()
     # print(circuit)
+
+    # service = QiskitRuntimeService(
+    #     channel="ibm_quantum",
+    #     token="fa0372ac79105aaec3e2bbff758cb43dc9506244ea5fba95957381cd14f56a38fc96f0fbc31e98d93318017772027e45f80ab6e71678e18d44e05f8f6655516b",
+    # )
+    # backend = service.backend("ibm_sherbrooke")
+    # coupling_map = backend.coupling_map
 
     pass_manager.append(
         MetaSabreSwap(
@@ -489,10 +499,14 @@ if __name__ == "__main__":
             heuristic="basic",
             seed=42,
             fake_run=False,
-            max_depth=10,
+            max_depth=5,
         )
     )
-    base_manager.append(BaseSabreSwap(coupling_map, heuristic="basic", seed=42))
+    base_manager.append(
+        [
+            BaseSabreSwap(coupling_map, heuristic="basic", seed=42),
+        ]
+    )
 
     start = time.time()
     new_circuit = pass_manager.run(circuit)
