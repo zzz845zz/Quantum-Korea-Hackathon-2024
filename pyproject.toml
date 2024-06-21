@@ -1,0 +1,2 @@
+[project.entry-points."qiskit.transpiler.layout"] 
+"vf2" = "my_qiskit_plugin:VF2LayoutPlugin”
