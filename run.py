@@ -24,63 +24,38 @@ scorer = scorer()
 transpiler_list = []
 transpiler_names = []
 
-seed = 10000
-
 
 def append_transpiler(pm, name):
     transpiler_list.append(pm)
     transpiler_names.append(name)
 
 
+seed = 10000
 pm_lv2 = generate_preset_pass_manager(
     backend=backend, optimization_level=2, seed_transpiler=seed
 )
-append_transpiler(
-    pm=pm_lv2,
-    name="preset pass manager level 2",
-)
+# append_transpiler(
+#     pm=pm_lv2,
+#     name="preset pass manager level 2",
+# )
 # transpiler_list.append(pm_lv2)
 # transpiler_names.append("preset pass manager level 2")
 
-append_transpiler(
-    generate_preset_pass_manager(
-        optimization_level=2,
-        backend=backend,
-        layout_method="sabre",
-        routing_method="bsabre",
-        translation_method="synthesis",
-    ),
-    name="bsabre",
-)
-
-append_transpiler(
-    StagedPassManager(
-        stages=["init", "layout", "routing", "translation"],
-        # init=pm_lv2.init,
-        init=pm_lv2.init,
-        # layout=pm_lv2.layout,
-        layout=pm_lv2.layout,
-        # layout="vf2",
-        routing=pm_lv2.routing,
-        # routing=my_routing,
-        translation=pm_lv2.translation,
-    ),
-    name="pm_our",
-)
-
 # grade_transpiler(transpiler_list, backend, scorer)
 transpiler_list = [
+    pm_lv2,
     generate_preset_pass_manager(
         optimization_level=2,
         backend=backend,
-        layout_method="sabre",
-        routing_method="bsabre",
-        translation_method="synthesis",
-    )
+        # layout_method="sabre",
+        routing_method="msabre",
+        # translation_method="translate",
+    ),
 ]
-
-num_qubits = np.arange(2, 7)
-circuit = QuantumCircuit(5)
-circuit.h(range(5))
-isa_circuit = transpiler_list[0].run(circuit)
-print((sum(isa_circuit.count_ops().values())))
+print_passes(transpiler_list[-1])
+tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler(
+    transpiler_list, backend, scorer, num_qubits=np.arange(5, 6)
+)
+# print(tr_depths)
+for i in range(len(tr_scores)):
+    print(f"Score for {i}: {tr_scores[i]}")

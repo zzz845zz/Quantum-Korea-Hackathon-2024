@@ -43,7 +43,7 @@ class MetaSabreSwap(TransformationPass):
         heuristic="basic",
         seed=None,
         fake_run=False,
-        max_depth=2,
+        max_depth=1,
     ):
         r"""SabreSwap initializer.
 

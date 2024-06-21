@@ -44,14 +44,15 @@ def print_passes(target: StagedPassManager):
     print(list_stage_plugins("translation"))
 
 
-def grade_transpiler(transpiler_list, backend, scorer):
+def grade_transpiler(transpiler_list, backend, scorer, num_qubits=None):
     tr_depths = [[] for i in range(len(transpiler_list))]
     tr_gate_counts = [[] for i in range(len(transpiler_list))]
     tr_cnot_counts = [[] for i in range(len(transpiler_list))]
     tr_scores = [[] for i in range(len(transpiler_list))]
     # print(tr_depths, len(transpiler_list))
 
-    num_qubits = np.arange(2, 15)
+    if num_qubits == None:
+        num_qubits = np.arange(2, 15)
 
     for nq in num_qubits:
         print(f"Start transpiling the {nq}-qubit circuit")
@@ -66,8 +67,7 @@ def grade_transpiler(transpiler_list, backend, scorer):
             tr_cnot_counts[i].append(isa_circuit.num_nonlocal_gates())
             tr_scores[i].append(scorer.score(isa_circuit, backend))
 
-        for i in range(len(transpiler_list)):
-            print(transpiler_list[i][1], tr_scores[i])
+    return tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores
 
 
 # def plot_
