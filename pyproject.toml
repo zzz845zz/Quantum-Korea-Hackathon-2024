@@ -1,4 +1,4 @@
-[tool.poetry]
+[project]
 name = "example_project"
 version = "0.1.0"
 description = "An example project"
