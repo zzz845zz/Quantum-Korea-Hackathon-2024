@@ -105,7 +105,8 @@ class MetaSabreSwap(TransformationPass):
               mapped_dag (DAGCircuit): Output circuit if depth is 0.
               score (int): Score of the layout if depth is not 0.
         """
-        print("Suppl depth: ", depth)
+        # print("Suppl depth: ", depth)
+        num_executed = 0
         while front_layer:
             execute_gate_list = []
 
@@ -131,10 +132,6 @@ class MetaSabreSwap(TransformationPass):
                 and len(ops_since_progress) > max_iterations_without_progress
                 and depth == 0
             ):
-                # Backtrack to the last time we made progress, then greedily insert swaps to route
-                # the gate with the smallest distance between its arguments.  This is a release
-                # valve for the algorithm to avoid infinite loops only, and should generally not
-                # come into play for most circuits.
                 self._undo_operations(ops_since_progress, mapped_dag, current_layout)
                 self._add_greedy_swaps(
                     front_layer, mapped_dag, current_layout, canonical_register
@@ -143,6 +140,7 @@ class MetaSabreSwap(TransformationPass):
 
             if execute_gate_list:
                 for node in execute_gate_list:
+                    num_executed += 1
                     self._apply_gate(
                         mapped_dag, node, current_layout, canonical_register
                     )
@@ -163,12 +161,28 @@ class MetaSabreSwap(TransformationPass):
             # for best score, pick one randomly.
             if extended_set is None:
                 extended_set = self._obtain_extended_set(dag, front_layer)
-            swap_scores = {}
+            h_scores = []
             for swap_qubits in self._obtain_swaps(front_layer, current_layout):
+                h_scores.append(
+                    (
+                        swap_qubits,
+                        self._score_heuristic(
+                            self.heuristic,
+                            front_layer,
+                            extended_set,
+                            current_layout,
+                            swap_qubits,
+                        ),
+                    )
+                )
+            h_scores.sort(key=lambda x: x[1])  # Sort by H score (lower is better)
+            high_score_len = max(len(h_scores) // 2, 2)
+            swap_scores = {}
+            for swap_qubits, _ in h_scores[:high_score_len]:
                 trial_layout = current_layout.copy()
                 trial_layout.swap(*swap_qubits)
                 if depth < self.max_depth:
-                    score = self._run_suppl(
+                    num_exec_temp, final_depth = self._run_suppl(
                         depth + 1,
                         deepcopy(dag),
                         rng,
@@ -181,26 +195,20 @@ class MetaSabreSwap(TransformationPass):
                         canonical_register,
                         deepcopy(extended_set),
                     )
+                    num_exec_temp += num_executed
                 else:
-                    score = self._score_heuristic(
-                        self.heuristic,
-                        front_layer,
-                        extended_set,
-                        trial_layout,
-                        swap_qubits,
-                    )
-                swap_scores[swap_qubits] = score
+                    num_exec_temp, final_depth = num_executed, depth
+                swap_scores[swap_qubits] = (num_exec_temp, final_depth)
             # print("Swap scores: ", swap_scores)
-            min_score = min(swap_scores.values())
+            max_score = max(swap_scores.values(), key=lambda x: x[0] / max(x[1], 1))
 
             if depth > 0:
-                return min_score
+                return num_exec_temp, final_depth
 
-            best_swaps = [k for k, v in swap_scores.items() if v == min_score]
-            best_swaps.sort(
-                key=lambda x: (self._bit_indices[x[0]], self._bit_indices[x[1]])
-            )
-            best_swap = rng.choice(best_swaps)
+            best_swaps = [k for k, v in swap_scores.items() if v == max_score]
+            best_swaps.sort(key=lambda x: dict(h_scores)[x])
+            # best_swap = rng.choice(best_swaps)
+            best_swap = best_swaps[0]
             swap_node = self._apply_gate(
                 mapped_dag,
                 DAGOpNode(op=SwapGate(), qargs=best_swap),
@@ -220,7 +228,7 @@ class MetaSabreSwap(TransformationPass):
         if depth == 0:
             self.property_set["final_layout"] = current_layout
         if depth > 0:
-            return 0
+            return num_executed, depth
         if not self.fake_run:
             return mapped_dag
         return dag
@@ -464,35 +472,40 @@ def _shortest_swap_path(target_qubits, coupling_map, layout):
 if __name__ == "__main__":
     from qiskit.transpiler import PassManager
     from qiskit.circuit.library import QFT
-    from qiskit.circuit import QuantumCircuit
     from qiskit.transpiler import CouplingMap
     from qiskit.transpiler.passes.routing import SabreSwap as BaseSabreSwap
+    import time
 
-    coupling_map = [[0, 1], [1, 0], [1, 2], [2, 1], [2, 3], [3, 2]]
+    nq = 6
+    coupling_map = CouplingMap.from_line(nq)
     pass_manager = PassManager()
     base_manager = PassManager()
-    circuit = QFT(4).decompose()
-    print(circuit)
+    circuit = QFT(nq).decompose()
+    # print(circuit)
 
     pass_manager.append(
         MetaSabreSwap(
-            CouplingMap(coupling_map),
+            coupling_map,
             heuristic="basic",
             seed=42,
             fake_run=False,
-            max_depth=2,
+            max_depth=10,
         )
     )
-    base_manager.append(
-        BaseSabreSwap(CouplingMap(coupling_map), heuristic="basic", seed=42)
-    )
+    base_manager.append(BaseSabreSwap(coupling_map, heuristic="basic", seed=42))
 
+    start = time.time()
     new_circuit = pass_manager.run(circuit)
+    meta_time = time.time() - start
+    start = time.time()
     base_circuit = base_manager.run(circuit)
+    base_time = time.time() - start
 
     print("MetaSabreSwap:")
     print(new_circuit)
     print(new_circuit.count_ops())
+    print("Time: ", meta_time)
     print("BaseSabreSwap:")
     print(base_circuit)
     print(base_circuit.count_ops())
+    print("Time: ", base_time)
