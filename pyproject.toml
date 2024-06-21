@@ -1,2 +1,8 @@
+[tool.poetry]
+name = "example_project"
+version = "0.1.0"
+description = "An example project"
+authors = ["Author Name <author@example.com>"]
+
 [project.entry-points."qiskit.transpiler.layout"] 
 "vf2" = "my_qiskit_plugin:VF2LayoutPlugin"
