@@ -6,6 +6,9 @@ from qiskit.circuit import Instruction
 from qiskit.compiler import transpile
 from qiskit.quantum_info import hellinger_distance, hellinger_fidelity
 from qiskit_aer import AerSimulator
+from qiskit.converters import circuit_to_dag, dag_to_circuit
+from collections import OrderedDict
+
 
 class scorer:
     def __init__(
@@ -14,17 +17,6 @@ class scorer:
         return
 
     def score(
-        self, 
-        circuit_target: QuantumCircuit, 
-        circuit_transpiled: QuantumCircuit, 
-        backend, 
-    ):
-        self.grader_operation_check(circuit_transpiled, backend)
-        self.grader_connection_check(circuit_transpiled, backend)
-        self.grader_circuit_accuracy(circuit_target, circuit_transpiled)
-        return self.transpile_scoring(circuit_transpiled, backend)
-
-    def transpile_scoring(
         self, 
         circ: QuantumCircuit, 
         backend, 
@@ -78,6 +70,16 @@ class scorer:
                         touched.add(q0)
 
         return fid
+
+    def validate(
+        self, 
+        circuit_target: QuantumCircuit, 
+        circuit_transpiled: QuantumCircuit, 
+        backend, 
+    ):
+        self.grader_operation_check(circuit_transpiled, backend)
+        self.grader_connection_check(circuit_transpiled, backend)
+        self.grader_circuit_accuracy(circuit_target, circuit_transpiled)
 
     def grader_operation_check(
         self, 
@@ -162,8 +164,8 @@ class scorer:
             Prints out whether the transpiled circuit is within epsilon accuracy of the original circuit.
         """
 
-        circuit_target = transpile(circuit_target, backend = simulator)
-        circuit_transpiled = transpile(circuit_transpiled, backend = simulator)
+        circuit_target = transpile(self._remove_idle_qwires(circuit_target), backend = simulator)
+        circuit_transpiled = transpile(self._remove_idle_qwires(circuit_transpiled), backend = simulator)
 
         counts_target = self._counts(circuit_target)
         counts_transpiled = self._counts(circuit_transpiled)
@@ -285,3 +287,18 @@ class scorer:
         counts = result.get_counts()
 
         return counts
+
+    def _remove_idle_qwires(
+        self, 
+        circ: QuantumCircuit, 
+    ):
+        dag = circuit_to_dag(circ)
+
+        idle_wires = list(dag.idle_wires())
+        for w in idle_wires:
+            dag._remove_idle_wire(w)
+            dag.qubits.remove(w)
+
+        dag.qregs = OrderedDict()
+
+        return dag_to_circuit(dag)
