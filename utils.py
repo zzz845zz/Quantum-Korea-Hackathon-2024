@@ -13,35 +13,52 @@ from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit.transpiler.preset_passmanagers.plugin import list_stage_plugins
 
 
-def print_passes(target: StagedPassManager):
-    print("----- init stage ")
-    print(list_stage_plugins("init"))
-    for task in target.init.to_flow_controller().tasks:
-        print(" -", type(task).__name__)
+def print_passes(target: StagedPassManager, stage: str = None):
+    if stage in [None, "init"]:
+        print("----- init stage ")
+        # print(list_stage_plugins("init"))
+        for task in target.init.to_flow_controller().tasks:
+            print(" -", type(task).__name__)
 
-    print("----- layout stage ")
-    print(list_stage_plugins("layout"))
-    for controller_group in target.layout.to_flow_controller().tasks:
-        print(controller_group)
-        tasks = getattr(controller_group, "tasks", [])
-        for task in tasks:
-            print(" - ", str(type(task).__name__))
-    # print(qc_tr.layout.final_index_layout())
-    # display(plot_circuit_layout(pm.run(qc), backend))
+    if stage in [None, "layout"]:
+        print("----- layout stage ")
+        # print(list_stage_plugins("layout"))
+        for controller_group in target.layout.to_flow_controller().tasks:
+            # print(controller_group)
+            tasks = getattr(controller_group, "tasks", [])
+            for task in tasks:
+                print(" - ", str(type(task).__name__))
 
-    print("----- routing stage")
-    print(list_stage_plugins("routing"))
-    # for i in range(4):
-    # print(f"\nOptimization level {i}:")
-    # pm = generate_preset_pass_manager(backend=backend, optimization_level=i, routing_method='basic', seed_transpiler=seed)
-    for controller_group in target.routing.to_flow_controller().tasks:
-        print(controller_group)
-        tasks = getattr(controller_group, "tasks", [])
-        for task in tasks:
-            print(" - ", str(type(task).__name__))
+    if stage in [None, "routing"]:
+        print("----- routing stage")
+        # print(list_stage_plugins("routing"))
+        # for i in range(4):
+        # print(f"\nOptimization level {i}:")
+        # pm = generate_preset_pass_manager(backend=backend, optimization_level=i, routing_method='basic', seed_transpiler=seed)
+        for controller_group in target.routing.to_flow_controller().tasks:
+            # print(controller_group)
+            tasks = getattr(controller_group, "tasks", [])
+            for task in tasks:
+                print(" - ", str(type(task).__name__))
 
-    print("----- translation stage")
-    print(list_stage_plugins("translation"))
+    if stage in [None, "translation"]:
+        print("----- translation stage")
+        # print(list_stage_plugins("translation"))
+        for controller_group in target.translation.to_flow_controller().tasks:
+            # print(controller_group)
+            tasks = getattr(controller_group, "tasks", [])
+            for task in tasks:
+                print(" - ", str(type(task).__name__))
+
+    if stage in [None, "optimization"]:
+        print("---- optimization stage")
+        for controller_group in target.optimization.to_flow_controller().tasks:
+            print(controller_group)
+            # for task in controller_group.tasks:
+            #     tasks = getattr(controller_group, "tasks", [])
+            #     for task in tasks:
+            #         print(" - ", str(type(task).__name__))
+
 
 
 def grade_transpiler(transpiler_list, backend, scorer, num_qubits=None):
