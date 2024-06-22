@@ -2,13 +2,23 @@ import numpy as np
 from qiskit_ibm_runtime import QiskitRuntimeService
 
 from qiskit_transpiler_service.transpiler_service import TranspilerService
+from meta_sabre.meta_sabre_swap import MetaSabreSwap
 from qkh2024.grader import scorer
 from qiskit.transpiler.passmanager import StagedPassManager, PassManager
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit.transpiler.preset_passmanagers.plugin import list_stage_plugins
 from utils import print_passes, grade_transpiler
 
+def get_routing_pm(coupling_map):
+    # Get the MetaSabreSwap PassManager
+    pm = PassManager()
+    pm.append(
+        MetaSabreSwap(
+            coupling_map=coupling_map,
+        )
+    )
 
+    return pm
 
 if __name__ == "__main__":
     # Connect to the Qiskit Runtime Service
@@ -24,12 +34,15 @@ if __name__ == "__main__":
     pm_lv2 = generate_preset_pass_manager(
         backend=backend, optimization_level=2, seed_transpiler=seed
     )
-    pm_msabre =  generate_preset_pass_manager(
-            backend=backend,
-            optimization_level=2,
-            # layout_method="sabre",
-            routing_method="msabre",
-            # translation_method="translate",
+
+    pm_msabre = StagedPassManager(
+    stages=['init', 'layout', 'routing', 'translation', 'optimization', 'scheduling'],
+        init=pm_lv2.init,
+        layout=pm_lv2.layout,
+        routing=get_routing_pm(coupling_map),
+        translation=pm_lv2.translation,
+        optimization=pm_lv2.optimization,
+        scheduling=pm_lv2.scheduling
     )
     print_passes(pm_msabre)
 
@@ -37,7 +50,9 @@ if __name__ == "__main__":
     scorer = scorer()
     transpiler_list = [
         pm_lv2,
-        pm_msabre
+        pm_msabre,
+        # staged_pm,
+        # pm_msabrestaged_pm2
     ]
     tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler(
         transpiler_list, backend, scorer, num_qubits=np.arange(5, 6)
