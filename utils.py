@@ -1,16 +1,15 @@
+from colorama import Fore
 import numpy as np
 from qiskit.transpiler.preset_passmanagers.plugin import list_stage_plugins
 from qiskit import QuantumCircuit
 from qiskit.circuit.library import QFT
 from qiskit_ibm_runtime import QiskitRuntimeService
-
-# from qiskit_ibm_runtime.fake_provider import FakeKyiv
 from qiskit_transpiler_service.transpiler_service import TranspilerService
-from qkh2024.grader import scorer
 from qiskit.transpiler.passes import Unroll3qOrMore
 from qiskit.transpiler.passmanager import PassManager, StagedPassManager
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit.transpiler.preset_passmanagers.plugin import list_stage_plugins
+from qiskit.circuit.random import random_circuit
 
 
 def print_passes(target: StagedPassManager, stage: str = None):
@@ -31,12 +30,8 @@ def print_passes(target: StagedPassManager, stage: str = None):
 
     if stage in [None, "routing"]:
         print("----- routing stage")
-        # print(list_stage_plugins("routing"))
-        # for i in range(4):
-        # print(f"\nOptimization level {i}:")
-        # pm = generate_preset_pass_manager(backend=backend, optimization_level=i, routing_method='basic', seed_transpiler=seed)
         for controller_group in target.routing.to_flow_controller().tasks:
-            # print(controller_group)
+            print(controller_group)
             tasks = getattr(controller_group, "tasks", [])
             for task in tasks:
                 print(" - ", str(type(task).__name__))
@@ -82,6 +77,25 @@ def grade_transpiler(transpiler_list, backend, scorer, num_qubits=None):
             tr_gate_counts[i].append(sum(isa_circuit.count_ops().values()))
             tr_cnot_counts[i].append(isa_circuit.num_nonlocal_gates())
             tr_scores[i].append(scorer.score(isa_circuit, backend))
+
+    return tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores
+
+
+def grade_transpiler_circuit(transpiler_list, backend, scorer, circuit):
+    tr_depths = [[] for i in range(len(transpiler_list))]
+    tr_gate_counts = [[] for i in range(len(transpiler_list))]
+    tr_cnot_counts = [[] for i in range(len(transpiler_list))]
+    tr_scores = [[] for i in range(len(transpiler_list))]
+    # print(tr_depths, len(transpiler_list))
+
+    print(Fore.GREEN + f"Start transpiling the given circuit")
+    for i in range(len(transpiler_list)):
+        isa_circuit = transpiler_list[i].run(circuit)
+        # scorer.validate(circuit, isa_circuit, backend)
+        tr_depths[i].append(isa_circuit.depth())
+        tr_gate_counts[i].append(sum(isa_circuit.count_ops().values()))
+        tr_cnot_counts[i].append(isa_circuit.num_nonlocal_gates())
+        tr_scores[i].append(scorer.score(isa_circuit, backend))
 
     return tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores
 

@@ -9,7 +9,7 @@ from qiskit.transpiler.passes import *
 from qiskit.transpiler.passmanager import StagedPassManager, PassManager
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit.transpiler.preset_passmanagers.plugin import list_stage_plugins
-from utils import print_passes, grade_transpiler
+from utils import grade_transpiler_circuit, print_passes, grade_transpiler
 from qiskit.providers import BackendV2
 from colorama import Fore
 
@@ -67,8 +67,8 @@ class PassCombination:
         pm.routing += [rp(cmap) for rp in self.RoutingPasses if rp is not None]
         pm.optimization += [op() for op in self.OptimizationPasses if op is not None]
 
-        tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler(
-            [pm], backend, scorer(), num_qubits=np.arange(7, 8), circuit=circuit
+        tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler_circuit(
+            [pm], backend, scorer(), circuit=circuit
         )
         return tr_scores[0][0]
 
@@ -83,6 +83,7 @@ class GeneticAlgorithmCompilerOptimization:
         generations: int,
         # fitness_function,
         backend,
+        pm_base=None,
         circuit=None,
     ):
         """_summary_
@@ -106,9 +107,12 @@ class GeneticAlgorithmCompilerOptimization:
         self.population = self.initialize_population()
         self.circuit = circuit
 
-        self.pm_lv2: StagedPassManager = generate_preset_pass_manager(
-            backend=backend, optimization_level=2, seed_transpiler=10000
-        )
+        if pm_base is None:
+            self.pm_base: StagedPassManager = generate_preset_pass_manager(
+                backend=backend, optimization_level=2, seed_transpiler=10000
+            )
+        else:
+            self.pm_base = pm_base
 
     def initialize_population(self):
         population = []
@@ -146,7 +150,7 @@ class GeneticAlgorithmCompilerOptimization:
         #     print(op)
 
         return individual.get_score(
-            self.backend, base=self.pm_lv2, circuit=self.circuit
+            self.backend, base=self.pm_base, circuit=self.circuit
         )
 
     def select(self):
@@ -250,7 +254,7 @@ class GeneticAlgorithmCompilerOptimization:
         best_individual = max(self.population, key=self.evaluate_fitness)
 
         cmap = self.backend.coupling_map
-        best_pm = deepcopy(self.pm_lv2)
+        best_pm = deepcopy(self.pm_base)
         best_pm.layout += [
             lp(cmap) for lp in best_individual.LayoutPasses if lp is not None
         ]

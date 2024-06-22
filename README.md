@@ -14,5 +14,13 @@ Install dependencies
 Run
 
 ```bash
-(.venv) python3 run.py
+(.venv) python3 run.py -c qft -n 3 -o qft.csv       # 3 qubits QFT
+(.venv) python3 run.py -c random -n 3 -o random.csv # 3 qubits random
+```
+
+Bench
+
+```bash
+(.venv) ./bench.sh qft
+(.venv) ./bench.sh random
 ```
