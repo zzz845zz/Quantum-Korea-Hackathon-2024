@@ -1,0 +1,8 @@
+numpy
+qiskit
+qiskit-aer
+qiskit-ibm-runtime
+qiskit-transpiler-service
+colorama
+retworkx
+.
