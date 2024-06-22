@@ -6,3 +6,4 @@ qiskit-transpiler-service
 colorama
 retworkx
 z3-solver
+python-constraint
