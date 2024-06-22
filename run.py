@@ -1,24 +1,16 @@
+from copy import deepcopy
 import numpy as np
 from qiskit_ibm_runtime import QiskitRuntimeService
 
 from qiskit_transpiler_service.transpiler_service import TranspilerService
+from genetic import GeneticAlgorithmCompilerOptimization
 from meta_sabre.meta_sabre_swap import MetaSabreSwap
 from qkh2024.grader import scorer
+from qiskit.transpiler.passes import *
 from qiskit.transpiler.passmanager import StagedPassManager, PassManager
 from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit.transpiler.preset_passmanagers.plugin import list_stage_plugins
 from utils import print_passes, grade_transpiler
-
-def get_routing_pm(coupling_map):
-    # Get the MetaSabreSwap PassManager
-    pm = PassManager()
-    pm.append(
-        MetaSabreSwap(
-            coupling_map=coupling_map,
-        )
-    )
-
-    return pm
 
 if __name__ == "__main__":
     # Connect to the Qiskit Runtime Service
@@ -29,69 +21,66 @@ if __name__ == "__main__":
     backend = service.backend("ibm_sherbrooke")
     coupling_map = backend.coupling_map
 
-    # Create pass managers
-    seed = 10000
     pm_lv2 = generate_preset_pass_manager(
-        backend=backend, optimization_level=2, seed_transpiler=seed
+        backend=backend, optimization_level=2, seed_transpiler=10000
     )
 
-    pm_msabre = StagedPassManager(
-    stages=['init', 'layout', 'routing', 'translation', 'optimization', 'scheduling'],
-        init=pm_lv2.init,
-        layout=pm_lv2.layout,
-        routing=PassManager(
-                MetaSabreSwap(
-                    coupling_map=coupling_map,
-                    max_depth=1
-                )
-            ),
-        translation=pm_lv2.translation,
-        optimization=pm_lv2.optimization,
-        scheduling=pm_lv2.scheduling
+    # Define parameters
+    population_size = 10
+    gene_length = 5  # Number of passes in each category
+    mutation_rate = 0.10
+    crossover_rate = 0.7
+    generations = 3
+
+    # Instantiate and run the genetic algorithm
+    ga = GeneticAlgorithmCompilerOptimization(
+        population_size=population_size,
+        gene_length=gene_length,
+        mutation_rate=mutation_rate,
+        crossover_rate=crossover_rate,
+        generations=generations,
+        # fitness_function=compiler_pass_fitness,
+        backend=backend,
     )
-    # print_passes(pm_msabre)
 
-    # pm_msabre_d3 = StagedPassManager(
-    # stages=['init', 'layout', 'routing', 'translation', 'optimization', 'scheduling'],
-    #     init=pm_lv2.init,
-    #     layout=pm_lv2.layout,
-    #     routing=PassManager(
-    #             MetaSabreSwap(
-    #                 coupling_map=coupling_map,
-    #                 max_depth=3
-    #             )
-    #         ),
-    #     translation=pm_lv2.translation,
-    #     optimization=pm_lv2.optimization,
-    #     scheduling=pm_lv2.scheduling
-    # )
+    best_individual, best_fitness = ga.run()
+    print(
+        f"Best Compiler Pass Combination: {best_individual}, Best Fitness: {best_fitness}"
+    )
 
-    # pm_msabre_d10 = StagedPassManager(
-    # stages=['init', 'layout', 'routing', 'translation', 'optimization', 'scheduling'],
-    #     init=pm_lv2.init,
-    #     layout=pm_lv2.layout,
-    #     routing=PassManager(
-    #             MetaSabreSwap(
-    #                 coupling_map=coupling_map,
-    #                 max_depth=5
-    #             )
-    #         ),
-    #     translation=pm_lv2.translation,
-    #     optimization=pm_lv2.optimization,
-    #     scheduling=pm_lv2.scheduling
-    # )
-    # print_passes(pm_msabre_d10)
+    pm_ga = StagedPassManager(
+        stages=[
+            "init",
+            "layout",
+            "routing",
+            "optimization",
+            "translation",
+            "scheduling",
+        ],
+        init=deepcopy(pm_lv2.init),
+        layout=deepcopy(pm_lv2.layout)
+        + [lp(coupling_map) for lp in best_individual.LayoutPasses],
+        routing=deepcopy(pm_lv2.routing)
+        + [rp(coupling_map) for rp in best_individual.RoutingPasses],
+        translation=deepcopy(pm_lv2.translation),
+        optimization=deepcopy(pm_lv2.optimization)
+        + [op() for op in best_individual.OptimizationPasses],
+        scheduling=deepcopy(pm_lv2.scheduling),
+    )
+
+    # passaa = pm_lv3.optimization
 
     # Grades
     scorer = scorer()
     transpiler_list = [
+        # pm_msabre,
         pm_lv2,
-        pm_msabre,
-        # pm_msabre_d3,
-        # pm_msabre_d10
+        pm_ga,
+        # pm_lv3,
+        # pm_test,
     ]
     tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler(
-        transpiler_list, backend, scorer, num_qubits=np.arange(8, 9)
+        transpiler_list, backend, scorer, num_qubits=np.arange(7, 8)
     )
 
     for i in range(len(tr_scores)):
