@@ -5,3 +5,4 @@ qiskit-ibm-runtime
 qiskit-transpiler-service
 colorama
 retworkx
+z3-solver
