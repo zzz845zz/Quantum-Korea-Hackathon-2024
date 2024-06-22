@@ -11,12 +11,12 @@ from qiskit.transpiler.preset_passmanagers import generate_preset_pass_manager
 from qiskit.transpiler.preset_passmanagers.plugin import list_stage_plugins
 from utils import print_passes, grade_transpiler
 from qiskit.providers import BackendV2
-
+from colorama import Fore
 
 # Define possible passes
 LayoutPasses = [
     None,
-    TrivialLayout,
+    # TrivialLayout,
     DenseLayout,
     SabreLayout,
     CSPLayout,
@@ -40,21 +40,18 @@ OptimizationPasses = [
     Collect2qBlocks,
     Optimize1qGates,
     CollectMultiQBlocks,
-    # Optimize1qGatesDecomposition,
+    # CollectLinearFunctions,
     CXCancellation,
-    # InverseCancellation,
     # CommutationAnalysis,
     CommutativeCancellation,
-    # Optimize1qGatesSimpleCommutation,
     OptimizeCliffords,
     RemoveDiagonalGatesBeforeMeasure,
     HoareOptimizer,
     # ElidePermutations,
-    # Collect1qRuns,
-    # Collect2qBlocks,
-    # CollectMultiQBlocks,
-    # CollectLinearFunctions,
 ]
+# InverseCancellation,
+# Optimize1qGatesSimpleCommutation,
+# Optimize1qGatesDecomposition,
 
 
 class PassCombination:
@@ -63,7 +60,7 @@ class PassCombination:
         self.RoutingPasses: list = RoutingPasses
         self.OptimizationPasses: list = OptimizationPasses
 
-    def get_score(self, backend: BackendV2, base: StagedPassManager):
+    def get_score(self, backend: BackendV2, base: StagedPassManager, circuit=None):
         cmap = backend.coupling_map
         pm = deepcopy(base)
         pm.layout += [lp(cmap) for lp in self.LayoutPasses if lp is not None]
@@ -71,7 +68,7 @@ class PassCombination:
         pm.optimization += [op() for op in self.OptimizationPasses if op is not None]
 
         tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler(
-            [pm], backend, scorer(), num_qubits=np.arange(13, 14)
+            [pm], backend, scorer(), num_qubits=np.arange(7, 8), circuit=circuit
         )
         return tr_scores[0][0]
 
@@ -86,6 +83,7 @@ class GeneticAlgorithmCompilerOptimization:
         generations: int,
         # fitness_function,
         backend,
+        circuit=None,
     ):
         """_summary_
 
@@ -106,6 +104,7 @@ class GeneticAlgorithmCompilerOptimization:
         # self.fitness_function = fitness_function
         self.backend = backend
         self.population = self.initialize_population()
+        self.circuit = circuit
 
         self.pm_lv2: StagedPassManager = generate_preset_pass_manager(
             backend=backend, optimization_level=2, seed_transpiler=10000
@@ -136,8 +135,19 @@ class GeneticAlgorithmCompilerOptimization:
         return population
 
     def evaluate_fitness(self, individual: PassCombination):
-        return individual.get_score(self.backend, base=self.pm_lv2)
-        # return self.fitness_function(individual, self.backend)
+        # print("Layout Passes:")
+        # for lp in individual.LayoutPasses:
+        #     print(lp)
+        # print("Routing Passes:")
+        # for rp in individual.RoutingPasses:
+        #     print(rp)
+        # print("Optimization Passes:")
+        # for op in individual.OptimizationPasses:
+        #     print(op)
+
+        return individual.get_score(
+            self.backend, base=self.pm_lv2, circuit=self.circuit
+        )
 
     def select(self):
         weights = [self.evaluate_fitness(individual) for individual in self.population]
@@ -197,19 +207,22 @@ class GeneticAlgorithmCompilerOptimization:
     def run(self):
 
         best_individual = max(self.population, key=self.evaluate_fitness)
-        print(f"[gen] Init Best Fitness = {self.evaluate_fitness(best_individual)}")
-        print("Layout Passes:")
-        for lp in best_individual.LayoutPasses:
-            print(lp)
-        print("Routing Passes:")
-        for rp in best_individual.RoutingPasses:
-            print(rp)
-        print("Optimization Passes:")
-        for op in best_individual.OptimizationPasses:
-            print(op)
+        print(
+            Fore.BLUE
+            + f"[gen] Init Best Fitness = {self.evaluate_fitness(best_individual)}"
+        )
+        # print(Fore.BLUE + "Layout Passes:")
+        # for lp in best_individual.LayoutPasses:
+        #     print(lp)
+        # print(Fore.BLUE + "Routing Passes:")
+        # for rp in best_individual.RoutingPasses:
+        #     print(rp)
+        # print(Fore.BLUE + "Optimization Passes:")
+        # for op in best_individual.OptimizationPasses:
+        #     print(op)
 
         for generation in range(self.generations):
-            print(f"[gen] Generation {generation}")
+            print(Fore.BLUE + f"[gen] Generation {generation}")
             new_population = []
 
             weights = [
@@ -218,20 +231,33 @@ class GeneticAlgorithmCompilerOptimization:
             top1, top2 = [self.population[i] for i in np.argsort(weights)[-2:]]
             new_population.extend([top1, top2])
             for _ in range((self.population_size // 2) - 1):
-                print("[gen] Selecting parents")
+                print(Fore.BLUE + "[gen] Selecting parents")
                 parent1, parent2 = random.choices(self.population, weights=weights, k=2)
                 # parent1, parent2 = self.select()
 
-                print("[gen] Crossover")
+                print(Fore.BLUE + "[gen] Crossover")
                 child1, child2 = self.crossover(parent1, parent2)
 
-                print("[gen] Mutating")
+                print(Fore.BLUE + "[gen] Mutating")
                 new_population.extend([self.mutate(child1), self.mutate(child2)])
             self.population = new_population
             best_individual = max(self.population, key=self.evaluate_fitness)
             print(
-                f"[gen] Generation {generation}: Best Fitness = {self.evaluate_fitness(best_individual)}"
+                Fore.BLUE
+                + f"[gen] Generation {generation}: Best Fitness = {self.evaluate_fitness(best_individual)}"
             )
 
         best_individual = max(self.population, key=self.evaluate_fitness)
-        return best_individual, self.evaluate_fitness(best_individual)
+
+        cmap = self.backend.coupling_map
+        best_pm = deepcopy(self.pm_lv2)
+        best_pm.layout += [
+            lp(cmap) for lp in best_individual.LayoutPasses if lp is not None
+        ]
+        best_pm.routing += [
+            rp(cmap) for rp in best_individual.RoutingPasses if rp is not None
+        ]
+        best_pm.optimization += [
+            op() for op in best_individual.OptimizationPasses if op is not None
+        ]
+        return best_individual, self.evaluate_fitness(best_individual), best_pm
