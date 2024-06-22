@@ -60,7 +60,6 @@ def print_passes(target: StagedPassManager, stage: str = None):
             #         print(" - ", str(type(task).__name__))
 
 
-
 def grade_transpiler(transpiler_list, backend, scorer, num_qubits=None):
     tr_depths = [[] for i in range(len(transpiler_list))]
     tr_gate_counts = [[] for i in range(len(transpiler_list))]
@@ -68,7 +67,7 @@ def grade_transpiler(transpiler_list, backend, scorer, num_qubits=None):
     tr_scores = [[] for i in range(len(transpiler_list))]
     # print(tr_depths, len(transpiler_list))
 
-    if num_qubits == None:
+    if num_qubits is None:
         num_qubits = np.arange(2, 15)
 
     for nq in num_qubits:
