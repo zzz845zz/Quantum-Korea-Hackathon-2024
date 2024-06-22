@@ -39,23 +39,59 @@ if __name__ == "__main__":
     stages=['init', 'layout', 'routing', 'translation', 'optimization', 'scheduling'],
         init=pm_lv2.init,
         layout=pm_lv2.layout,
-        routing=get_routing_pm(coupling_map),
+        routing=PassManager(
+                MetaSabreSwap(
+                    coupling_map=coupling_map,
+                    max_depth=1
+                )
+            ),
         translation=pm_lv2.translation,
         optimization=pm_lv2.optimization,
         scheduling=pm_lv2.scheduling
     )
-    print_passes(pm_msabre)
+    # print_passes(pm_msabre)
+
+    # pm_msabre_d3 = StagedPassManager(
+    # stages=['init', 'layout', 'routing', 'translation', 'optimization', 'scheduling'],
+    #     init=pm_lv2.init,
+    #     layout=pm_lv2.layout,
+    #     routing=PassManager(
+    #             MetaSabreSwap(
+    #                 coupling_map=coupling_map,
+    #                 max_depth=3
+    #             )
+    #         ),
+    #     translation=pm_lv2.translation,
+    #     optimization=pm_lv2.optimization,
+    #     scheduling=pm_lv2.scheduling
+    # )
+
+    # pm_msabre_d10 = StagedPassManager(
+    # stages=['init', 'layout', 'routing', 'translation', 'optimization', 'scheduling'],
+    #     init=pm_lv2.init,
+    #     layout=pm_lv2.layout,
+    #     routing=PassManager(
+    #             MetaSabreSwap(
+    #                 coupling_map=coupling_map,
+    #                 max_depth=5
+    #             )
+    #         ),
+    #     translation=pm_lv2.translation,
+    #     optimization=pm_lv2.optimization,
+    #     scheduling=pm_lv2.scheduling
+    # )
+    # print_passes(pm_msabre_d10)
 
     # Grades
     scorer = scorer()
     transpiler_list = [
         pm_lv2,
         pm_msabre,
-        # staged_pm,
-        # pm_msabrestaged_pm2
+        # pm_msabre_d3,
+        # pm_msabre_d10
     ]
     tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler(
-        transpiler_list, backend, scorer, num_qubits=np.arange(5, 6)
+        transpiler_list, backend, scorer, num_qubits=np.arange(8, 9)
     )
 
     for i in range(len(tr_scores)):
