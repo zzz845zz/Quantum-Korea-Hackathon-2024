@@ -13,13 +13,13 @@ case $circuit in
     qft)
         for t in $(seq 2 2 14); do
             echo "Running for $t qubits"
-            python3 run.py -c qft -n $t -o out/qft.csv
+            python3 run.py -c qft -n $t -o out/qft_20_10_10.csv
         done
     ;;
     random)
         for t in $(seq 2 2 14); do
             echo "Running for $t qubits"
-            python3 run.py -c random -n $t -o out/random.csv
+            python3 run.py -c random -n $t -o out/random_20_10_10.csv
         done
     ;;
 esac

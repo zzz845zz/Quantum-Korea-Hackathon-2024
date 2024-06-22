@@ -129,11 +129,11 @@ if __name__ == "__main__":
     pm_lv2 = get_pm(backend, optimization_level=2)
     pm_lv3 = get_pm(backend, optimization_level=3)
     pm_ga = get_pm_ga(
-        population_size=10,  # Number of individuals
+        population_size=20,  # Number of individuals
         gene_length=10,  # Number of passes in each category
         mutation_rate=0.1,
         crossover_rate=0.5,
-        generations=5,  # Number of iterations
+        generations=10,  # Number of iterations
         backend=backend,
         pm_base=pm_lv2,
         circuit=circuit,
