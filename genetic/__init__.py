@@ -14,9 +14,47 @@ from qiskit.providers import BackendV2
 
 
 # Define possible passes
-LayoutPasses = [TrivialLayout, DenseLayout, SabreLayout]
-RoutingPasses = [BasicSwap, LookaheadSwap, StochasticSwap]
-OptimizationPasses = [Optimize1qGates, Optimize1qGatesDecomposition, CXCancellation]
+LayoutPasses = [
+    None,
+    TrivialLayout,
+    DenseLayout,
+    SabreLayout,
+    CSPLayout,
+    VF2Layout,
+    # ApplyLayout,
+    SabrePreLayout,
+    # FullAncillaAllocation,
+    # Layout2qDistance,
+    # EnlargeWithAncilla,
+]
+RoutingPasses = [
+    None,
+    BasicSwap,
+    LookaheadSwap,
+    StochasticSwap,
+    SabreSwap,
+]
+OptimizationPasses = [
+    None,
+    Collect1qRuns,
+    Collect2qBlocks,
+    Optimize1qGates,
+    CollectMultiQBlocks,
+    # Optimize1qGatesDecomposition,
+    CXCancellation,
+    # InverseCancellation,
+    # CommutationAnalysis,
+    CommutativeCancellation,
+    # Optimize1qGatesSimpleCommutation,
+    OptimizeCliffords,
+    RemoveDiagonalGatesBeforeMeasure,
+    HoareOptimizer,
+    # ElidePermutations,
+    # Collect1qRuns,
+    # Collect2qBlocks,
+    # CollectMultiQBlocks,
+    # CollectLinearFunctions,
+]
 
 
 class PassCombination:
@@ -27,27 +65,13 @@ class PassCombination:
 
     def get_score(self, backend: BackendV2, base: StagedPassManager):
         cmap = backend.coupling_map
-        # print(cmap)
-        pm = StagedPassManager(
-            stages=[
-                "init",
-                "layout",
-                "routing",
-                "optimization",
-                "translation",
-                "scheduling",
-            ],
-            init=deepcopy(base.init),
-            layout=deepcopy(base.layout) + [lp(cmap) for lp in self.LayoutPasses],
-            routing=deepcopy(base.routing) + [rp(cmap) for rp in self.RoutingPasses],
-            translation=deepcopy(base.translation),
-            optimization=deepcopy(base.optimization)
-            + [op() for op in self.OptimizationPasses],
-            scheduling=deepcopy(base.scheduling),
-        )
+        pm = deepcopy(base)
+        pm.layout += [lp(cmap) for lp in self.LayoutPasses if lp is not None]
+        pm.routing += [rp(cmap) for rp in self.RoutingPasses if rp is not None]
+        pm.optimization += [op() for op in self.OptimizationPasses if op is not None]
 
         tr_depths, tr_gate_counts, tr_cnot_counts, tr_scores = grade_transpiler(
-            [pm], backend, scorer(), num_qubits=np.arange(7, 8)
+            [pm], backend, scorer(), num_qubits=np.arange(13, 14)
         )
         return tr_scores[0][0]
 
@@ -89,7 +113,18 @@ class GeneticAlgorithmCompilerOptimization:
 
     def initialize_population(self):
         population = []
-        for _ in range(self.population_size):
+
+        # Empty individual
+        population.append(
+            PassCombination(
+                LayoutPasses=[None] * self.gene_length,
+                RoutingPasses=[None] * self.gene_length,
+                OptimizationPasses=[None] * self.gene_length,
+            )
+        )
+
+        # Randomly generate the first individual
+        for _ in range(self.population_size - 1):
             individual = PassCombination(
                 LayoutPasses=random.choices(LayoutPasses, k=self.gene_length),
                 RoutingPasses=random.choices(RoutingPasses, k=self.gene_length),
@@ -106,12 +141,16 @@ class GeneticAlgorithmCompilerOptimization:
 
     def select(self):
         weights = [self.evaluate_fitness(individual) for individual in self.population]
-        print(weights)
         return random.choices(self.population, weights=weights, k=2)
+
+    def select_top_k(self, k):
+        weights = [self.evaluate_fitness(individual) for individual in self.population]
+        return [self.population[i] for i in np.argsort(weights)[-k:]]
 
     def crossover(self, parent1: PassCombination, parent2: PassCombination):
         # Single-point crossover
         if random.random() < self.crossover_rate:
+
             # Randomly select a crossover point
             point = random.randint(1, self.gene_length - 1)
             child1_layout = parent1.LayoutPasses[:point] + parent2.LayoutPasses[point:]
@@ -156,12 +195,32 @@ class GeneticAlgorithmCompilerOptimization:
         return individual
 
     def run(self):
+
+        best_individual = max(self.population, key=self.evaluate_fitness)
+        print(f"[gen] Init Best Fitness = {self.evaluate_fitness(best_individual)}")
+        print("Layout Passes:")
+        for lp in best_individual.LayoutPasses:
+            print(lp)
+        print("Routing Passes:")
+        for rp in best_individual.RoutingPasses:
+            print(rp)
+        print("Optimization Passes:")
+        for op in best_individual.OptimizationPasses:
+            print(op)
+
         for generation in range(self.generations):
             print(f"[gen] Generation {generation}")
             new_population = []
-            for _ in range(self.population_size // 2):
+
+            weights = [
+                self.evaluate_fitness(individual) for individual in self.population
+            ]
+            top1, top2 = [self.population[i] for i in np.argsort(weights)[-2:]]
+            new_population.extend([top1, top2])
+            for _ in range((self.population_size // 2) - 1):
                 print("[gen] Selecting parents")
-                parent1, parent2 = self.select()
+                parent1, parent2 = random.choices(self.population, weights=weights, k=2)
+                # parent1, parent2 = self.select()
 
                 print("[gen] Crossover")
                 child1, child2 = self.crossover(parent1, parent2)
