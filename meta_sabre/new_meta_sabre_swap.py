@@ -1,30 +1,16 @@
-# This code is part of Qiskit.
-#
-# (C) Copyright IBM 2017, 2020.
-#
-# This code is licensed under the Apache License, Version 2.0. You may
-# obtain a copy of this license in the LICENSE.txt file in the root directory
-# of this source tree or at http://www.apache.org/licenses/LICENSE-2.0.
-#
-# Any modifications or derivative works of this code must retain this
-# copyright notice, and modified files need to carry a notice indicating
-# that they have been altered from the originals.
-
-"""Routing via SWAP insertion using the SABRE method from Li et al."""
-
 import logging
+from dataclasses import dataclass
 from collections import defaultdict
 from copy import copy, deepcopy
 
 import numpy as np
+import retworkx
 
 from qiskit.circuit.library.standard_gates import SwapGate
-from qiskit.circuit.random import random_circuit
 from qiskit.transpiler.basepasses import TransformationPass
 from qiskit.transpiler.exceptions import TranspilerError
 from qiskit.transpiler.layout import Layout
-from qiskit.dagcircuit import DAGOpNode
-import rustworkx
+from qiskit.dagcircuit import DAGOpNode, DAGCircuit
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +23,19 @@ DECAY_RATE = 0.001  # Decay coefficient for penalizing serial swaps.
 DECAY_RESET_INTERVAL = 5  # How often to reset all decay rates to 1.
 
 
-class MetaSabreSwap(TransformationPass):
+@dataclass
+class SabreContext:
+    ops_since_progress: list
+    required_predecessors: dict
+    extended_set: list
+    mapped_dag: DAGCircuit
+    current_layout: Layout
+    qubits_decay: dict
+    num_search_steps: int
+    front_layer: list
+
+
+class NewMetaSabreSwap(TransformationPass):
     def __init__(
         self,
         coupling_map,
@@ -46,17 +44,6 @@ class MetaSabreSwap(TransformationPass):
         fake_run=False,
         max_depth=2,
     ):
-        r"""SabreSwap initializer.
-
-        Args:
-            coupling_map (CouplingMap): CouplingMap of the target backend.
-            heuristic (str): The type of heuristic to use when deciding best
-                swap strategy ('basic' or 'lookahead' or 'decay').
-            seed (int): random seed used to tie-break among candidate swaps.
-            fake_run (bool): if true, it only pretend to do routing, i.e., no
-                swap is effectively added.
-        """
-
         super().__init__()
 
         # Assume bidirectional couplings, fixing gate direction is easy later.
@@ -69,45 +56,41 @@ class MetaSabreSwap(TransformationPass):
         self.heuristic = heuristic
         self.seed = seed
         self.fake_run = fake_run
-        self.qubits_decay = None
         self._bit_indices = None
         self.dist_matrix = None
-        self.max_depth = max_depth
+        self.context = []  # context stack
 
-    def _run_suppl(
-        self,
-        depth,
-        dag,
-        rng,
-        front_layer,
-        current_layout,
-        mapped_dag,
-        num_search_steps,
-        ops_since_progress,
-        max_iterations_without_progress,
-        canonical_register,
-        required_predecessors,
-        extended_set=None,
-    ):
-        """Supplementary function to run the SabreSwap pass
+    def run(self, dag):
+        if len(dag.qregs) != 1 or dag.qregs.get("q", None) is None:
+            raise TranspilerError("Sabre swap runs on physical circuits only.")
 
-        Args:
-              depth (int): Depth of recursion.
-              dag (DAGCircuit): Input circuit.
-              rng (np.random.Generator): Random number generator.
-              front_layer (list): List of nodes to be executed. (deepcopy needed?)
-              current_layout (Layout): Current layout of qubits. (deepcopy needed?)
-              mapped_dag (DAGCircuit): current mapped circuit.
-              num_search_steps (int): Number of search steps taken so far. (deepcopy needed?)
-              ops_since_progress (list): List of operations since last progress. (deepcopy needed?)
-              max_iterations_without_progress (int): Maximum number of iterations without progress.
-              canonical_register (QuantumRegister): Canonical quantum register.
-          Returns:
-              mapped_dag (DAGCircuit): Output circuit if depth is 0.
-              score (int): Score of the layout if depth is not 0.
-        """
-        # print("Suppl depth: ", depth)
-        num_executed = 0
+        if len(dag.qubits) > self.coupling_map.size():
+            raise TranspilerError("More virtual qubits exist than physical.")
+
+        max_iterations_without_progress = 10 * len(dag.qubits)  # Arbitrary.
+
+        do_expensive_logging = logger.isEnabledFor(logging.DEBUG)
+
+        self.dist_matrix = self.coupling_map.distance_matrix
+
+        rng = np.random.default_rng(self.seed)
+
+        canonical_register = dag.qregs["q"]
+
+        self._bit_indices = {bit: idx for idx, bit in enumerate(canonical_register)}
+
+        outmost_context = SabreContext(
+            ops_since_progress=[],
+            extended_set=None,
+            required_predecessors=self._build_required_predecessors(dag),
+            mapped_dag=dag.copy_empty_like(),
+            current_layout=Layout.generate_trivial_layout(canonical_register),
+            qubits_decay=dict.fromkeys(dag.qubits, 1),
+            num_search_steps=0,
+            front_layer=dag.front_layer(),
+        )
+        self.context.append(outmost_context)
+
         while front_layer:
             execute_gate_list = []
 
@@ -131,8 +114,11 @@ class MetaSabreSwap(TransformationPass):
             if (
                 not execute_gate_list
                 and len(ops_since_progress) > max_iterations_without_progress
-                and depth == 0
             ):
+                # Backtrack to the last time we made progress, then greedily insert swaps to route
+                # the gate with the smallest distance between its arguments.  This is a release
+                # valve for the algorithm to avoid infinite loops only, and should generally not
+                # come into play for most circuits.
                 self._undo_operations(ops_since_progress, mapped_dag, current_layout)
                 self._add_greedy_swaps(
                     front_layer, mapped_dag, current_layout, canonical_register
@@ -141,17 +127,33 @@ class MetaSabreSwap(TransformationPass):
 
             if execute_gate_list:
                 for node in execute_gate_list:
-                    num_executed += 1
                     self._apply_gate(
                         mapped_dag, node, current_layout, canonical_register
                     )
                     for successor in self._successors(node, dag):
-                        required_predecessors[successor] -= 1
-                        if self._is_resolved(successor, required_predecessors):
+                        self.required_predecessors[successor] -= 1
+                        if self._is_resolved(successor):
                             front_layer.append(successor)
 
                     if node.qargs:
                         self._reset_qubits_decay()
+
+                # Diagnostics
+                if do_expensive_logging:
+                    logger.debug(
+                        "free! %s",
+                        [
+                            (n.name if isinstance(n, DAGOpNode) else None, n.qargs)
+                            for n in execute_gate_list
+                        ],
+                    )
+                    logger.debug(
+                        "front_layer: %s",
+                        [
+                            (n.name if isinstance(n, DAGOpNode) else None, n.qargs)
+                            for n in front_layer
+                        ],
+                    )
 
                 ops_since_progress = []
                 extended_set = None
@@ -161,60 +163,21 @@ class MetaSabreSwap(TransformationPass):
             # the best swap and insert it. When two or more swaps tie
             # for best score, pick one randomly.
             if extended_set is None:
-                extended_set = self._obtain_extended_set(
-                    dag, front_layer, required_predecessors
-                )
-            h_scores = []
-            for swap_qubits in self._obtain_swaps(front_layer, current_layout):
-                h_scores.append(
-                    (
-                        swap_qubits,
-                        self._score_heuristic(
-                            self.heuristic,
-                            front_layer,
-                            extended_set,
-                            current_layout,
-                            swap_qubits,
-                        ),
-                    )
-                )
-            h_scores.sort(
-                key=lambda x: x[1], reverse=False
-            )  # Sort by H score (lower is better)
-            high_score_len = max(len(h_scores), 2)  # TODO: make this a parameter
+                extended_set = self._obtain_extended_set(dag, front_layer)
             swap_scores = {}
-            for swap_qubits, _ in h_scores[:high_score_len]:
+            for swap_qubits in self._obtain_swaps(front_layer, current_layout):
                 trial_layout = current_layout.copy()
                 trial_layout.swap(*swap_qubits)
-                if depth < self.max_depth:
-                    num_exec_temp, final_depth = self._run_suppl(
-                        depth=depth + 1,
-                        dag=dag,
-                        rng=deepcopy(rng),
-                        front_layer=deepcopy(front_layer),
-                        current_layout=trial_layout,
-                        mapped_dag=deepcopy(mapped_dag),
-                        num_search_steps=deepcopy(num_search_steps),
-                        ops_since_progress=deepcopy(ops_since_progress),
-                        max_iterations_without_progress=deepcopy(
-                            max_iterations_without_progress
-                        ),
-                        canonical_register=deepcopy(canonical_register),
-                        required_predecessors=deepcopy(required_predecessors),
-                        extended_set=deepcopy(extended_set),
-                    )
-                    num_exec_temp += num_executed
-                else:
-                    num_exec_temp, final_depth = num_executed, depth
-                swap_scores[swap_qubits] = (num_exec_temp, final_depth)
-            max_score = max(swap_scores.values(), key=lambda x: x[0] / max(x[1], 1))
-
-            if depth > 0:
-                return num_exec_temp, final_depth
-
-            best_swaps = [k for k, v in swap_scores.items() if v == max_score]
-            best_swaps.sort(key=lambda x: dict(h_scores)[x])
-            best_swap = best_swaps[0]
+                score = self._score_heuristic(
+                    self.heuristic, front_layer, extended_set, trial_layout, swap_qubits
+                )
+                swap_scores[swap_qubits] = score
+            min_score = min(swap_scores.values())
+            best_swaps = [k for k, v in swap_scores.items() if v == min_score]
+            best_swaps.sort(
+                key=lambda x: (self._bit_indices[x[0]], self._bit_indices[x[1]])
+            )
+            best_swap = rng.choice(best_swaps)
             swap_node = self._apply_gate(
                 mapped_dag,
                 DAGOpNode(op=SwapGate(), qargs=best_swap),
@@ -231,69 +194,20 @@ class MetaSabreSwap(TransformationPass):
                 self.qubits_decay[best_swap[0]] += DECAY_RATE
                 self.qubits_decay[best_swap[1]] += DECAY_RATE
 
-        if depth == 0:
-            self.property_set["final_layout"] = current_layout
-        if depth > 0:
-            return num_executed, depth
+            # Diagnostics
+            if do_expensive_logging:
+                logger.debug("SWAP Selection...")
+                logger.debug(
+                    "extended_set: %s", [(n.name, n.qargs) for n in extended_set]
+                )
+                logger.debug("swap scores: %s", swap_scores)
+                logger.debug("best swap: %s", best_swap)
+                logger.debug("qubits decay: %s", self.qubits_decay)
+
+        self.property_set["final_layout"] = current_layout
         if not self.fake_run:
             return mapped_dag
         return dag
-
-    def run(self, dag):
-        """Run the SabreSwap pass on `dag`.
-
-        Args:
-            dag (DAGCircuit): the directed acyclic graph to be mapped.
-        Returns:
-            DAGCircuit: A dag mapped to be compatible with the coupling_map.
-        Raises:
-            TranspilerError: if the coupling map or the layout are not
-            compatible with the DAG
-        """
-        if len(dag.qregs) != 1 or dag.qregs.get("q", None) is None:
-            raise TranspilerError("Sabre swap runs on physical circuits only.")
-
-        if len(dag.qubits) > self.coupling_map.size():
-            raise TranspilerError("More virtual qubits exist than physical.")
-
-        max_iterations_without_progress = 10 * len(dag.qubits)  # Arbitrary.
-        ops_since_progress = []
-
-        self.dist_matrix = self.coupling_map.distance_matrix
-
-        rng = np.random.default_rng(self.seed)
-
-        # Preserve input DAG's name, regs, wire_map, etc. but replace the graph.
-        mapped_dag = None
-        if not self.fake_run:
-            mapped_dag = dag.copy_empty_like()
-
-        canonical_register = dag.qregs["q"]
-        current_layout = Layout.generate_trivial_layout(canonical_register)
-
-        self._bit_indices = {bit: idx for idx, bit in enumerate(canonical_register)}
-
-        # A decay factor for each qubit used to heuristically penalize recently
-        # used qubits (to encourage parallelism).
-        self.qubits_decay = dict.fromkeys(dag.qubits, 1)
-
-        required_predecessors = self._build_required_predecessors(dag)
-        num_search_steps = 0
-        front_layer = dag.front_layer()
-
-        return self._run_suppl(
-            depth=0,
-            dag=dag,
-            rng=rng,
-            front_layer=front_layer,
-            current_layout=current_layout,
-            mapped_dag=mapped_dag,
-            num_search_steps=num_search_steps,
-            ops_since_progress=ops_since_progress,
-            max_iterations_without_progress=max_iterations_without_progress,
-            canonical_register=canonical_register,
-            required_predecessors=required_predecessors,
-        )
 
     def _apply_gate(self, mapped_dag, node, current_layout, canonical_register):
         new_node = _transform_gate_for_layout(node, current_layout, canonical_register)
@@ -328,11 +242,11 @@ class MetaSabreSwap(TransformationPass):
             if isinstance(successor, DAGOpNode):
                 yield successor
 
-    def _is_resolved(self, node, required_predecessors):
+    def _is_resolved(self, node):
         """Return True if all of a node's predecessors in dag are applied."""
-        return required_predecessors[node] == 0
+        return self.required_predecessors[node] == 0
 
-    def _obtain_extended_set(self, dag, front_layer, required_predecessors):
+    def _obtain_extended_set(self, dag, front_layer):
         """Populate extended_set by looking ahead a fixed number of gates.
         For each existing element add a successor until reaching limit.
         """
@@ -345,8 +259,8 @@ class MetaSabreSwap(TransformationPass):
             for node in tmp_front_layer:
                 for successor in self._successors(node, dag):
                     decremented.append(successor)
-                    required_predecessors[successor] -= 1
-                    if self._is_resolved(successor, required_predecessors):
+                    self.required_predecessors[successor] -= 1
+                    if self._is_resolved(successor):
                         new_tmp_front_layer.append(successor)
                         if len(successor.qargs) == 2:
                             extended_set.append(successor)
@@ -355,7 +269,7 @@ class MetaSabreSwap(TransformationPass):
                     break
             tmp_front_layer = new_tmp_front_layer
         for node in decremented:
-            required_predecessors[node] += 1
+            self.required_predecessors[node] += 1
         return extended_set
 
     def _obtain_swaps(self, front_layer, current_layout):
@@ -463,7 +377,7 @@ def _shortest_swap_path(target_qubits, coupling_map, layout):
     start, goal = layout._v2p[v_start], layout._v2p[v_goal]
     # TODO: remove the list call once using retworkx 0.12, as the return value can be sliced.
     path = list(
-        rustworkx.dijkstra_shortest_paths(coupling_map.graph, start, target=goal)[goal]
+        retworkx.dijkstra_shortest_paths(coupling_map.graph, start, target=goal)[goal]
     )
     # Swap both qubits towards the "centre" (as opposed to applying the same swaps to one) to
     # parallelise and reduce depth.
@@ -473,60 +387,3 @@ def _shortest_swap_path(target_qubits, coupling_map, layout):
         yield v_start, layout._p2v[swap]
     for swap in backwards:
         yield v_goal, layout._p2v[swap]
-
-
-if __name__ == "__main__":
-    from qiskit.transpiler import PassManager
-    from qiskit.circuit.library import QFT
-    from qiskit.transpiler import CouplingMap
-    from qiskit.transpiler.passes.routing import SabreSwap as BaseSabreSwap
-    from qiskit.transpiler.passes.layout import TrivialLayout
-    from qiskit_ibm_runtime import QiskitRuntimeService
-    import time
-
-    nq = 5
-    coupling_map = CouplingMap.from_ring(nq)
-    # coupling_map = CouplingMap.from_grid(3, 3)
-    pass_manager = PassManager()
-    base_manager = PassManager()
-    # circuit = QFT(nq).decompose()
-    circuit = random_circuit(nq, 5 * nq, max_operands=2, seed=42).decompose()
-    # print(circuit)
-
-    # service = QiskitRuntimeService(
-    #     channel="ibm_quantum",
-    #     token="fa0372ac79105aaec3e2bbff758cb43dc9506244ea5fba95957381cd14f56a38fc96f0fbc31e98d93318017772027e45f80ab6e71678e18d44e05f8f6655516b",
-    # )
-    # backend = service.backend("ibm_sherbrooke")
-    # coupling_map = backend.coupling_map
-
-    pass_manager.append(
-        MetaSabreSwap(
-            coupling_map,
-            heuristic="basic",
-            seed=42,
-            fake_run=False,
-            max_depth=7,
-        )
-    )
-    base_manager.append(
-        [
-            BaseSabreSwap(coupling_map, heuristic="basic", seed=42),
-        ]
-    )
-
-    start = time.time()
-    new_circuit = pass_manager.run(circuit)
-    meta_time = time.time() - start
-    start = time.time()
-    base_circuit = base_manager.run(circuit)
-    base_time = time.time() - start
-
-    print("MetaSabreSwap:")
-    # print(new_circuit)
-    print("# of swaps: ", new_circuit.count_ops()["swap"])
-    print("Time: ", meta_time)
-    print("BaseSabreSwap:")
-    # print(base_circuit)
-    print("# of swaps: ", base_circuit.count_ops()["swap"])
-    print("Time: ", base_time)
